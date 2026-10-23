@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
+
+JARS_CACHE_CONTAINER = Path("/root/.ivy2.5.2/jars")
 
 
 def criar_sessao(
@@ -23,6 +27,12 @@ def criar_sessao(
         .config("spark.sql.session.timeZone", "America/Maceio")
         .config("spark.ui.showConsoleProgress", "false")
     )
-    spark = configure_spark_with_delta_pip(builder).getOrCreate()
+    # Se os JARs do Delta já foram baixados no build da imagem (/root/.ivy2.5.2/jars),
+    # carrega direto via spark.jars sem rodar a resolução verbosa do Ivy a cada sessão.
+    jars_locais = sorted(str(p) for p in JARS_CACHE_CONTAINER.glob("*.jar")) if JARS_CACHE_CONTAINER.exists() else []
+    if jars_locais:
+        spark = builder.config("spark.jars", ",".join(jars_locais)).getOrCreate()
+    else:
+        spark = configure_spark_with_delta_pip(builder).getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     return spark
