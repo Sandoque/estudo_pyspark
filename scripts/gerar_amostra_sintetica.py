@@ -245,6 +245,122 @@ def gerar() -> Path:
     return caminho_csv
 
 
+COLUNAS_LIVRO = (
+    "REVENDA", "NF", "LIVRO", "CHAVE_NF", "DATA_E", "CFOP", "COD_NATUREZA",
+    "CODCOMP", "CNPJ", "CODCLI", "COD_PRD_RED", "QTD", "QTD_INTEIRA",
+    "QTD_AVULSA", "INCIDENCIA", "VLR_PRODUTO", "VLR_IPI", "VLR_ICMS",
+    "VLR_PIS", "VLR_COFINS", "FRETE", "ADIC_FINANCEIRO", "VLR_TOTAL",
+    "VLR_TOTAL_NOTA_CALC",
+)
+
+
+def gerar_livro_saida() -> Path:
+    """Gera amostra sintética do Livro de Saída (T20/FR-17) com 3 competências + quarentena."""
+    from decimal import Decimal
+
+    rng = random.Random(42)
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    caminho_csv = DESTINO / "livro_saida_denver_sintetico.csv"
+
+    competencias = [
+        (2026, 8, "2026-08-15"),
+        (2026, 9, "2026-09-18"),
+        (2026, 10, "2026-10-10"),
+    ]
+    linhas_validas: list[dict] = []
+    for idx in range(1, 91):
+        ano, mes, data_e = competencias[idx % len(competencias)]
+        # Simula colisão de número de NF (ex.: NF 8 com chaves distintas na mesma competência)
+        nf = "8" if idx in (1, 4) else str(5000 + idx)
+        chave = f"3526{mes:02d}{idx:038d}"
+        vlr_prod = Decimal(f"{rng.randint(100, 50000)}.{rng.randint(0, 99):02d}")
+        vlr_icms = (vlr_prod * Decimal("0.18")).quantize(Decimal("0.01"))
+        vlr_pis = (vlr_prod * Decimal("0.0165")).quantize(Decimal("0.01"))
+        vlr_cofins = (vlr_prod * Decimal("0.0760")).quantize(Decimal("0.01"))
+        linhas_validas.append({
+            "REVENDA": "Denver",
+            "NF": nf,
+            "LIVRO": "S",
+            "CHAVE_NF": chave,
+            "DATA_E": data_e,
+            "CFOP": "5102" if idx % 2 == 0 else "5405",
+            "COD_NATUREZA": "1",
+            "CODCOMP": "1",
+            "CNPJ": f"112223330001{idx % 89 + 10:02d}",
+            "CODCLI": str(1000 + (idx % 30)),
+            "COD_PRD_RED": str(200 + (idx % 15)),
+            "QTD": str(1 + (idx % 10)),
+            "QTD_INTEIRA": str(1 + (idx % 10)),
+            "QTD_AVULSA": "0",
+            "INCIDENCIA": "1",
+            "VLR_PRODUTO": f"{vlr_prod:.2f}",
+            "VLR_IPI": "0.00",
+            "VLR_ICMS": f"{vlr_icms:.2f}",
+            "VLR_PIS": f"{vlr_pis:.2f}",
+            "VLR_COFINS": f"{vlr_cofins:.2f}",
+            "FRETE": "0.00",
+            "ADIC_FINANCEIRO": "0.00",
+            "VLR_TOTAL": f"{vlr_prod:.2f}",
+            "VLR_TOTAL_NOTA_CALC": f"{vlr_prod:.2f}",
+        })
+
+    # Duplicata exata + 4 casos de quarentena (revenda_diferente, sem_nf, sem_data_emissao, valor_invalido)
+    dup_exata = dict(linhas_validas[0])
+    q_revenda = {**linhas_validas[0], "REVENDA": "OutraRevenda", "NF": "9001"}
+    q_sem_nf = {**linhas_validas[0], "NF": "   "}
+    q_sem_data = {**linhas_validas[0], "NF": "9002", "DATA_E": "data-invalida"}
+    q_valor_inv = {**linhas_validas[0], "NF": "9003", "VLR_TOTAL_NOTA_CALC": "abc"}
+
+    todas = linhas_validas + [dup_exata, q_revenda, q_sem_nf, q_sem_data, q_valor_inv]
+
+    with caminho_csv.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=COLUNAS_LIVRO)
+        w.writeheader()
+        w.writerows(todas)
+
+    controles_mensais = {}
+    for ano, mes, _ in competencias:
+        comp = f"{ano:04d}-{mes:02d}"
+        recorte = [r for r in linhas_validas if r["DATA_E"].startswith(comp)]
+        chaves = {f"{r['REVENDA']}|{r['NF']}|{r['LIVRO']}|{r['CHAVE_NF']}" for r in recorte}
+        nfs_num = {r["NF"] for r in recorte}
+        controles_mensais[comp] = {
+            "ano": ano,
+            "mes": mes,
+            "itens": len(recorte),
+            "nfs_distintas": len(chaves),
+            "nfs_so_numero": len(nfs_num),
+            "vlr_produto": f"{sum(Decimal(r['VLR_PRODUTO']) for r in recorte):.2f}",
+            "vlr_icms": f"{sum(Decimal(r['VLR_ICMS']) for r in recorte):.2f}",
+            "vlr_pis": f"{sum(Decimal(r['VLR_PIS']) for r in recorte):.2f}",
+            "vlr_cofins": f"{sum(Decimal(r['VLR_COFINS']) for r in recorte):.2f}",
+            "vlr_total_nota_calc": f"{sum(Decimal(r['VLR_TOTAL_NOTA_CALC']) for r in recorte):.2f}",
+            "vlr_total_double_bruto": float(sum(Decimal(r["VLR_TOTAL_NOTA_CALC"]) for r in recorte)),
+        }
+
+    sha256 = hashlib.sha256(caminho_csv.read_bytes()).hexdigest()
+    manifesto = {
+        "arquivo": caminho_csv.name,
+        "linhas": len(todas),
+        "sha256": sha256,
+        "revenda": "Denver",
+        "data_inicial": "2026-08-01",
+        "data_final": "2026-10-31",
+        "consulta": "AMOSTRA SINTETICA LIVRO DE SAIDA (seed=42) — SEM DADO REAL",
+        "exportado_em": "2026-10-23T16:50:00",
+        "segundos_exportacao": 0.01,
+        "segundos_sql_controles": 0.01,
+        "competencias": len(controles_mensais),
+        "controles_mensais": controles_mensais,
+    }
+    caminho_csv.with_suffix(".json").write_text(
+        json.dumps(manifesto, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"Amostra sintética Livro de Saída gerada: {len(todas)} linhas -> {caminho_csv.relative_to(RAIZ)}")
+    return caminho_csv
+
+
 if __name__ == "__main__":
     gerar()
+    gerar_livro_saida()
 

@@ -2,6 +2,64 @@
 
 Cada checkpoint registra o que foi entregue, com números da execução real.
 
+## 23/10/2026 — fatia 2 entregue (Livro de Saída da Denver: 1,59 milhão de linhas e janela `replaceWhere`)
+
+**Execução** sobre `livro_saida_denver_20261023_165440.csv` (**1.592.890 itens**, 30
+competências de `05/2024` a `10/2026`, **R$ 690.836.525,78** em `VLR_TOTAL_NOTA_CALC`)
+e janela de lookback de 3 meses `livro_saida_denver_janela_20261023_165540.csv`
+(**118.308 itens**, competências `2026-08`, `2026-09` e `2026-10`).
+
+### 1. Reconciliação ao centavo e prova da perda em `float32` (FR-14, FR-15)
+
+- **30 de 30 competências (210 indicadores)** bateram com **R$ 0,00 de diferença**
+  entre a Gold do Spark (`DECIMAL(15,2)`) e o SQL de produção (`CAST(ROUND(..., 2) AS DECIMAL(15,2))`).
+- Em **todas** as 30 competências (todas acima de R$ 12 milhões/mês), a acumulação em
+  `float32` perdeu todos os centavos (arredondando para múltiplos de R$ 1,00 ou R$ 2,00,
+  com erro de até R$ 1,00 no mês só no `VLR_TOTAL_NOTA_CALC`, ex.: em `2026-09`
+  `20.632.843,00` vs `20.632.844,00` no `float32`, e em `2026-08` `18.792.584,98` vs
+  `18.792.584,00`).
+
+### 2. Carga Completa vs. Reprocessamento de Janela de 3 Meses com `replaceWhere` (FR-16)
+
+| Métrica | Carga Completa (30 meses: `05/2024`–`10/2026`) | Janela de 3 meses (`08/2026`–`10/2026` via `replaceWhere`) | Redução na Janela |
+| --- | ---: | ---: | ---: |
+| **Linhas processadas (Bronze = Silver)** | 1.592.890 | 118.308 | **-92,6%** |
+| **Arquivos Parquet gravados na Silver** | 30 arquivos (1 por mês) | **3 arquivos** (`numRemovedFiles = 3`) | **-90,0%** (27 meses intocados) |
+| **Tempo Spark — Bronze** | 11,70 s | 5,35 s | -54,3% |
+| **Tempo Spark — Silver (`DECIMAL` + `replaceWhere`)** | 37,75 s | **10,46 s** | **-72,3%** |
+| **Tempo Spark — Gold + Reconciliação** | 5,64 s | 3,32 s | -41,1% |
+| **Tempo Spark Total (sem sessão)** | **55,09 s** | **19,13 s** | **-65,3%** |
+| **Tempo MySQL (exportação + agregação SQL)** | 57,97 s (42,27 s + 15,70 s) | 3,74 s (2,42 s + 1,33 s) | -93,5% |
+| **Integridade dos 30 meses após `replaceWhere` parcial** | 30/30 ok | **30/30 ok** (`tabela_completa_integra_apos_janela = true`) | — |
+
+### 3. Achado técnico de memória JVM em escritas particionadas (`OutOfMemoryError`)
+
+Na primeira tentativa sobre 1,59 milhão de linhas, segurar `silver.cache()` na heap
+padrão de 1 GB enquanto 8 tarefas escreviam simultaneamente em 30 partições
+`(ano, mes)` abria até `8 × 30 = 240` buffers Parquet concorrentes na RAM e estourava
+`java.lang.OutOfMemoryError: Java heap space`. Três ajustes eliminaram o problema:
+1. **`repartition("ano", "mes")` antes do `partitionBy("ano", "mes")`:** cada tarefa
+   escreve uma competência por vez (1 buffer Parquet ativo por tarefa e **1 arquivo por
+   competência**, gerando exatos 30 arquivos em vez de 240);
+2. **Ler a Silver do Delta recém-gravado em vez de `.cache()` em RAM:** o Parquet no
+   disco já faz o papel de materialização sem ocupar a heap;
+3. **`spark.driver.memory = "4g"`** em `src/estudo/sessao.py`.
+
+### 4. Critério do teste de uso em escala de milhões de linhas
+
+1. **Bateu com a produção?** Sim: 1.592.890 linhas, 483.703 NFs e R$ 690.836.525,78
+   distribuídos em 30 meses bateram ao centavo (`R$ 0,00` de diferença).
+2. **Tempo e onde o jogo virou:** em 31 mil linhas (Fatia 1), o Spark era 5× mais lento
+   que o SQL (~30 s vs ~6 s). Em **1,59 milhão de linhas** (Fatia 2), o pipeline
+   completo Bronze → Silver → Gold → Reconciliação no Spark levou **55,1 s**, empatando
+   com o tempo de leitura + agregação do MySQL (**58,0 s**) — e a agregação Gold sobre a
+   Silver em Parquet/Delta levou apenas **5,54 s** para varrer 1,59 milhão de linhas
+   contra **15,70 s** do `GROUP BY` no MySQL (**~2,8× mais rápido no Delta/Parquet**).
+3. **O ganho da janela (`replaceWhere`):** reprocessar os 3 meses de lookback levou
+   **19,1 s** e reescreveu apenas **3 arquivos Parquet (118 mil linhas)**, preservando
+   os outros 27 arquivos intactos — sem precisar do `livros_geral_batch.py` abrindo
+   subprocessos por revenda nem regravar milhões de linhas toda noite no MySQL.
+
 ## 23/10/2026 — decisão: projeto gerido pelo uv (T15 e T16 entregues)
 
 O dono iniciou o projeto com `uv init`. Documentado em `plan.md` ("Ambiente

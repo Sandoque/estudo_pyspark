@@ -24,3 +24,11 @@ Estado: `[ ]` a fazer · `[x]` feito, com evidência.
 
 - [x] T15 Python 3.12 no projeto uv (`uv python pin 3.12`, `requires-python = ">=3.12,<3.13"`) e as dependências do plan com `uv add` (principal: pyspark, delta-spark; dev: pytest, jupyterlab; opcional: pandas, pyarrow) — evidência: `uv.lock` gerado e `uv run python -c "import pyspark, delta"` ok (23/10)
 - [x] T16 Dockerfile instalando pelo `uv.lock` (`uv sync --frozen`) no lugar de `docker/requirements.txt`, que sai — evidência: `docker compose build` + `pytest` (28 passed) + `scripts/testar_mutacoes.py` (8/8 mortas) verdes no contêiner novo (23/10)
+
+## Fatia 2 — Livro de Saída da Denver (1,59 milhão de linhas e janela `replaceWhere`)
+
+- [x] T17 (FR-11) `scripts/exportar_livro_saida.py`: exportação `READ ONLY` de `livros_fiscais.raw_livro_saida` (Denver completo: 1.592.890 linhas / 30 competências em 42,3 s; janela 3 meses: 118.308 linhas / 3 competências em 2,4 s) com manifesto SHA-256 e controles mensais do SQL (23/10)
+- [x] T18 (FR-12, FR-13) `src/estudo/livro_saida.py`: Bronze idempotente + Silver tipada em `DECIMAL(15,2)` (`try_cast` compatível com ANSI do Spark 4.0), chave da nota `(revenda, nf, livro, chave_nf)`, quarentena com motivo e gravação particionada por `(ano, mes)` com `repartition('ano', 'mes')` + `replaceWhere` (23/10)
+- [x] T19 (FR-14, FR-15) Gold mensal (`gold_livro_saida_mensal`), cálculo da deriva de `float32` e reconciliação ao centavo (`R$ 0,00` de diferença em todas as 30 competências × 7 indicadores = 210 valores) com os controles do SQL (23/10)
+- [x] T20 (FR-17) Amostra sintética `seeds/amostra_sintetica/livro_saida_denver_sintetico.{csv,json}` (95 linhas: 90 válidas, 4 quarentena, 1 duplicata exata), testes em `tests/test_livro_saida.py` (32 passed no total) e novas mutações fiscais em `scripts/testar_mutacoes.py` (10/10 mortas) (23/10)
+- [x] T21 (FR-16) `jobs/fatia2_livro_saida.py`: execução sobre os 1.592.890 registros reais da Denver (55,1 s) + benchmark de reprocessamento da janela de 3 meses (`replaceWhere` em 19,1 s gravando só 3 arquivos / 118.308 linhas e mantendo os outros 27 meses intactos) e checkpoint em `checkpoints.md` (23/10)

@@ -22,9 +22,10 @@ RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ / "src"))
 sys.path.insert(0, str(RAIZ / "tests"))
 
-from estudo import de_para, gold_reconhecimento, silver_clientes as s  # noqa: E402
+from estudo import de_para, gold_reconhecimento, livro_saida as ls, silver_clientes as s  # noqa: E402
 from estudo.sessao import criar_sessao  # noqa: E402
 import test_de_para_e_gold  # noqa: E402
+import test_livro_saida  # noqa: E402
 import test_silver_clientes  # noqa: E402
 
 
@@ -89,6 +90,10 @@ def _rodar_suite(spark) -> list[str]:
     checar(
         "test_reconhecimento_pela_regra_da_producao",
         lambda: test_de_para_e_gold.test_reconhecimento_pela_regra_da_producao(spark),
+    )
+    checar(
+        "test_chave_nota_separa_nfs_de_mesmo_numero_e_soma_decimal_exata",
+        lambda: test_livro_saida.test_chave_nota_separa_nfs_de_mesmo_numero_e_soma_decimal_exata(spark),
     )
     return falhas
 
@@ -164,6 +169,17 @@ def _mut_gold_aceita_numero_repetido(pares, donos, condicao):
     return pares.join(donos, "fim").where(F.col("donos") >= 1).select("codigo_cliente").distinct()
 
 
+def _mut_livro_chave_nota_so_nf(revenda: Column, nf: Column, livro: Column, chave_nf: Column) -> Column:
+    """Agrupa nota só por revenda + NF, fundindo notas de chaves distintas (erro da Correção 4)."""
+    return F.concat_ws("|", F.trim(revenda), F.trim(nf))
+
+
+def _mut_livro_valor_float32(coluna: Column) -> Column:
+    """Converte valor fiscal para float32 antes de somar (erro da Correção 1: perde centavos > R$ 2M)."""
+    limpo = F.nullif(F.trim(coluna), F.lit(""))
+    return limpo.try_cast("float").try_cast("decimal(15,2)")
+
+
 _calcular_original = gold_reconhecimento.calcular
 
 
@@ -185,6 +201,8 @@ def main() -> int:
         ("de_para_ate_inclusivo", patch.object(de_para, "bases_no_dia", _mut_de_para_ate_inclusivo)),
         ("unicidade_ignora_cancelado", patch.object(gold_reconhecimento, "calcular", _mut_gold_ignora_cancelado_na_unicidade)),
         ("unicidade_aceita_repetido", patch.object(gold_reconhecimento, "_clientes_com", _mut_gold_aceita_numero_repetido)),
+        ("livro_chave_nota_so_nf", patch.object(ls, "chave_nota", _mut_livro_chave_nota_so_nf)),
+        ("livro_valor_float32", patch.object(ls, "valor_decimal", _mut_livro_valor_float32)),
     ]
 
     sobreviventes = 0

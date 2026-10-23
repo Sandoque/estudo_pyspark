@@ -6,10 +6,16 @@ from delta import configure_spark_with_delta_pip
 from pyspark.sql import SparkSession
 
 
-def criar_sessao(nome: str = "estudo", master: str = "local[*]", particoes: int = 8) -> SparkSession:
+def criar_sessao(
+    nome: str = "estudo",
+    master: str = "local[*]",
+    particoes: int = 8,
+    memoria_driver: str = "4g",
+) -> SparkSession:
     builder = (
         SparkSession.builder.master(master)
         .appName(nome)
+        .config("spark.driver.memory", memoria_driver)
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
         # 31 mil linhas não pedem as 200 partições padrão do shuffle.

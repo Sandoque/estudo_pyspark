@@ -110,6 +110,34 @@ Unitários com Spark local (`local[2]`) e DataFrames pequenos, um arquivo por
 módulo. A reconciliação com a produção é o teste de integração: roda no job,
 sobre o arquivo exportado, e vai para o relatório.
 
+---
+
+# Plan — Fatia 2: Livro de Saída da Denver (FR-11 a FR-17)
+
+## Arquitetura
+
+```text
+Windows (host)                                   Contêiner "spark" (Linux)
+───────────────                                  ─────────────────────────
+scripts/exportar_livro_saida.py                  src/estudo/
+  SELECT READ ONLY em livros_fiscais               bronze_livro_saida.py   landing → Delta bronze
+  (completo 30 meses ou janela 3 meses)            silver_livro_saida.py   DECIMAL(15,2), chave NF,
+        │                                                                  quarentena, replaceWhere(ano,mes)
+        ▼                                          gold_livro_saida.py     resumo mensal DECIMAL vs float32,
+data/landing/livro_saida_denver_<ts>.csv                                   replaceWhere(ano,mes)
+data/landing/livro_saida_denver_<ts>.json        jobs/fatia2_livro_saida.py  carga completa + benchmark janela
+  (manifesto + controles mensais SQL)            tests/test_livro_saida.py   unitários + fim-a-fim sintético
+```
+
+## Decisões da Fatia 2
+
+| Decisão | Por quê |
+| --- | --- |
+| Colunas exportadas do `raw_livro_saida` | As colunas fiscais essenciais do cálculo de faturamento/impostos (`REVENDA`, `NF`, `LIVRO`, `CHAVE_NF`, `DATA_E`, `CFOP`, `CODCLI`, `COD_PRD_RED`, `QTD_INTEIRA`, `VLR_PRODUTO`, `VLR_ICMS`, `VLR_PIS`, `VLR_COFINS`, `VLR_TOTAL`, `VLR_TOTAL_NOTA_CALC`), formatando floats em 2 casas na exportação para refletir o centavo fiscal sem ruído binário |
+| Valores tipados como `DECIMAL(15,2)` na Silver | Elimina tanto a perda de dígitos significativos do `float32` acima de R$ 2 milhões quanto o ruído IEEE-754 do `DOUBLE` (`6640104.08000004`), espelhando o `CAST(ROUND(..., 2) AS DECIMAL(15,2))` do `notas_fiscais_resumo.sql` |
+| Chave da NF = `concat_ws('|', revenda, nf, coalesce(livro,''), coalesce(chave_nf,''))` | Reproduz a Correção 4 do plano fiscal (evita fundir NFs de mesma numeração com chaves/livros distintos) |
+| Particionamento por `(ano, mes)` + `replaceWhere` dinâmico na Silver e na Gold | O Livro de Saída reprocessa janelas de competência (3 meses de lookback). Com `replaceWhere` sobre os pares `(ano, mes)` presentes no lote, reprocessar 3 meses reescreve apenas 3 partições (~10% da tabela), preservando os outros 27 meses intocados |
+
 ## Comandos
 
 Ver `README.md`.

@@ -35,7 +35,18 @@ docker compose run --rm spark python jobs/fatia1_clientes.py
 docker compose run --rm spark python jobs/fatia1_clientes.py --arquivo seeds/amostra_sintetica/clientes_denver_sintetico.csv
 ```
 
-3. **Testes e prova de mutação**:
+3. **Fatia 2 — Livro de Saída da Denver (1,59 milhão de linhas + janela `replaceWhere`)**:
+
+```powershell
+# Exportar completo (30 meses) e janela de 3 meses do DW (só leitura):
+& C:\webservice\dbA\webservices_flask\.venv\Scripts\python.exe -B scripts\exportar_livro_saida.py
+& C:\webservice\dbA\webservices_flask\.venv\Scripts\python.exe -B scripts\exportar_livro_saida.py --data-inicial 2026-08-01 --prefixo livro_saida_denver_janela
+
+# Rodar a fatia 2 (ou com --arquivo seeds/amostra_sintetica/livro_saida_denver_sintetico.csv --sem-janela):
+docker compose run --rm spark python jobs/fatia2_livro_saida.py
+```
+
+4. **Testes e prova de mutação**:
 
 ```powershell
 docker compose run --rm spark pytest -q
