@@ -60,6 +60,52 @@ padrão de 1 GB enquanto 8 tarefas escreviam simultaneamente em 30 partições
    os outros 27 arquivos intactos — sem precisar do `livros_geral_batch.py` abrindo
    subprocessos por revenda nem regravar milhões de linhas toda noite no MySQL.
 
+---
+
+## Síntese do Benchmark, Vantagens, Custos e Recomendações para a Meggal
+
+### 1. Quadro comparativo: onde o Spark perde e onde vira o jogo
+
+| Cenário Medido | Volume (Denver) | MySQL (Produção) | PySpark + Delta (Local) | Veredito |
+| --- | ---: | ---: | ---: | --- |
+| **Fatia 1 — Cadastro de Clientes** (`dw_previsao_financeira.clientes`) | `31.625` linhas (~4,5 MB) | **`5,7 s`** (export `0,4 s` + 3 queries `5,3 s`) | **`30,7 s`** (+ `5,6 s` de sessão JVM) | **MySQL 5,4× mais rápido.** O custo fixo da JVM e do log transacional do Delta domina em dezenas de milhares de linhas. |
+| **Fatia 2 — Livro de Saída Completo** (`livros_fiscais.raw_livro_saida`, 30 meses) | `1.592.890` linhas (`483.703` NFs, R$ 690,84M) | **`58,0 s`** (leitura `42,3 s` + `GROUP BY` `15,7 s`) | **`55,1 s`** (Bronze `11,7 s` + Silver `37,8 s` + Gold **`5,5 s`**) | **Empate no pipeline completo (`55 s` vs `58 s`) e Gold 2,8× mais rápida no Delta (`5,5 s` vs `15,7 s`).** |
+| **Fatia 2 — Reprocessamento da Janela de 3 meses (`replaceWhere`)** | `118.308` linhas (`08/2026` a `10/2026`) | No consolidado atual (`Livros_Fiscais_geral`), **regrava a tabela inteira** (~18 min nas 11 revendas) | **`19,1 s`** (trocando só **3 arquivos Parquet** e mantendo 27 meses intactos) | **Redução de 65% no tempo e 90% na escrita de disco** em relação à carga completa da revenda. |
+
+### 2. As 4 vantagens reais do Delta Lake sobre o modelo atual (MySQL + Pandas + dbt)
+
+1. **Substituição atômica por partição (`replaceWhere` vs. Full Refresh):**
+   - Enquanto o consolidado fiscal atual reconstrói e regrava os ~5 milhões de linhas desde maio/2024 toda noite (gerando gigabytes de *binlog* e arquivos temporários no disco `C:` do servidor), a Silver e a Gold particionadas por `(ano, mes)` com `replaceWhere` trocam apenas os **3 arquivos `.parquet`** da janela de lookback (`numFiles = 3`, `numRemovedFiles = 3`), mantendo os 27 meses anteriores intocados e sem risco de deixar a tabela vazia se o processo cair no meio.
+2. **Atualização incremental sem reescrever arquivos (`Deletion Vectors` — T12):**
+   - Em tabelas de retrato cadastral (`silver_clientes`), ativar `delta.enableDeletionVectors = true` fez uma reexecução sem mudanças custar **zero bytes gravados** (*no-op*), e uma alteração em 2 clientes gravar **apenas 2 linhas** (`numTargetRowsCopied = 0`) em vez de reescrever 31.625 linhas.
+3. **Gestão de memória sem subprocessos manuais:**
+   - No pipeline em Pandas (`Livros_Fiscais_geral.py`), o volume das 11 revendas exigiu criar o `livros_geral_batch.py` abrindo um subprocesso Python por revenda com `gc.collect()`. No Spark, combinando `.repartition("ano", "mes")` antes do `.partitionBy("ano", "mes")` e leitura/escrita em Parquet, cada tarefa mantém apenas 1 buffer Parquet ativo por vez e faz *spill* automático em disco se necessário.
+4. **Governança e rastreabilidade nativas:**
+   - Idempotência pelo SHA-256 do lote (`_lote`), fechamento contábil explícito entre camadas (`bronze = silver + quarentena + duplicatas`), histórico de métricas por commit (`DESCRIBE HISTORY`) e viagem no tempo (`versionAsOf`) sem precisar manter tabelas auxiliares de snapshot.
+
+### 3. Onde o PySpark + Delta é pior (Custos e Armadilhas)
+
+- **Peso operacional e latência de partida:** exige JVM (Java 17+), contêiner Linux (ou `winutils` no Windows) e ~6 segundos só para iniciar a sessão. Para tabelas pequenas (< 200 mil linhas), é mais lento e mais complexo de operar que SQL puro.
+- **O consumidor final (`webservices_flask`) lê MySQL:** as telas do Flask (DRE, DOP, Opt-in WhatsApp) fazem consultas transacionais rápidas no MySQL. O Delta Lake não substitui o banco de dados de aplicação; qualquer resultado processado no Delta precisaria publicar a camada Gold (resumos) no MySQL.
+- **Exige atenção às métricas físicas (`_delta_log`):** sem olhar o histórico do Delta, um `MERGE` sem *deletion vectors* reescreve a tabela inteira (T12) e um `partitionBy` com `.cache()` sem `repartition` abre centenas de escritores Parquet simultâneos na heap da JVM (T21).
+
+### 4. Recomendações práticas para o ambiente de produção da Meggal
+
+#### A. O que manter exatamente como está (MySQL + Python + dbt)
+- **Cadastros e tabelas pequenas/médias (`clientes`, `produtos`, `fornecedor`, `despesas_operacionais`, `optin_service`):** o SQL responde entre `0,5 s` e `6 s`. Migrar para Spark multiplicaria o tempo por 5× sem nenhum benefício.
+- **Modelos analíticos finais da DRE no dbt (`dre_mensal`, `dre_por_marca`, `dre_linhas`):** operam sobre tabelas já agregadas e entregam diretamente no MySQL que o Flask consome.
+
+#### B. O que aplicar imediatamente no pipeline atual (sem precisar de Spark em produção)
+1. **Reprocessamento por janela (`ano, mes`) no `Livros_Fiscais_geral.py` e `notas_fiscais_resumo`:**
+   - Como provado na Fatia 2, processar apenas a janela de lookback de **3 meses** corta o volume em **92,6%** (`118.308` linhas contra `1.592.890` na Denver).
+   - Aplicar a troca transacional por janela de competência (como no `replaceWhere`, apagando e reinserindo apenas os 3 meses da janela em vez de reconstruir desde maio/2024 toda noite) deve reduzir a etapa de 18 minutos do `Livros_Fiscais_geral` para **~2 minutos** e eliminar o pico diário de *binlog* e espaço temporário no disco `C:` do servidor.
+2. **Aritmética fiscal estrita em `DECIMAL(15,2)`:**
+   - A Fatia 2 provou que em **30 de 30 meses** da Denver (todos acima de R$ 12 milhões) o `float32` perde os centavos. Manter `DECIMAL(15,2)` (`CAST(ROUND(..., 2) AS DECIMAL(15,2))`) em todas as somas fiscais elimina de vez divergências de arredondamento entre livro fiscal, relatório contábil e DRE.
+
+#### C. Onde PySpark + Delta faz sentido se o volume continuar crescendo
+- Se as tabelas históricas de **Livros Fiscais (`raw_livro_saida` + `raw_livro_entrada` + `livros_fiscais_geral`, ~5M linhas)** e **Livro Contábil (`raw_livro_contabil`, ~12,3M linhas)** continuarem crescendo e pressionando memória/disco do MySQL na janela noturna:
+  - Usar **PySpark + Delta em contêiner** apenas como **motor de processamento pesado (Bronze → Silver → Gold)** particionado por `(revenda, ano, mes)` com `replaceWhere` na janela, publicando no MySQL **somente a tabela Gold agregada** dos meses alterados para consumo do dbt e do Flask. Assim o MySQL deixa de fazer *hash join* e *filesort* sobre milhões de linhas com colunas `TEXT` e volta a atuar apenas como banco relacional rápido de leitura.
+
 ## 23/10/2026 — decisão: projeto gerido pelo uv (T15 e T16 entregues)
 
 O dono iniciou o projeto com `uv init`. Documentado em `plan.md` ("Ambiente
