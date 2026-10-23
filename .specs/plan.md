@@ -32,6 +32,7 @@ data/landing/clientes_denver_<ts>.json       qualidade.py     reconciliação e 
 | Silver com `MERGE` por `codigo_cliente` | Idempotente e preparada para lotes novos (o cadastro muda todo dia) |
 | De/para em seed CSV versionado | É regra comercial que muda por decisão (como a 131/134 em 21/10); vive em arquivo legível, não em `CASE` espalhado |
 | Gold recalculada inteira por dia de referência (`replaceWhere`) | Indicador de um dia é função do cadastro e da vigência; recalcular o dia é simples e idempotente |
+| Projeto Python gerido pelo **uv** (`pyproject.toml` + `uv.lock`), Python **3.12** | Uma lista de dependências só, com versões travadas; mesma versão de Python do contêiner. Ver "Ambiente Python (uv)" |
 
 ## Regras de normalização (FR-04)
 
@@ -49,6 +50,59 @@ data/landing/clientes_denver_<ts>.json       qualidade.py     reconciliação e 
 - **Reconhecimento (FR-07):** um número (fim8) reconhece o cliente quando
   pertence a **um só** cliente da Denver, olhando os campos considerados
   (`telefone`, ou `telefone` + `celular`). Mesma regra do `optin_service`.
+
+## Ambiente Python (uv)
+
+Decidido em 23/10/2026: o projeto é gerido pelo **uv** (`uv init` feito pelo
+dono). O contêiner continua sendo o ambiente de **execução** (job, testes,
+mutação); o ambiente uv no Windows serve ao editor (autocomplete, lint, tipos) e
+a experimentos rápidos.
+
+**Python 3.12, e não 3.14.** O `uv init` criou `requires-python = ">=3.14"`, mas
+o PySpark 4.0 suporta só até o Python 3.13. Fixar na versão do contêiner:
+
+```bash
+uv python pin 3.12
+```
+
+e, no `pyproject.toml`, `requires-python = ">=3.12,<3.13"`.
+
+**Dependências** — as mesmas versões de `docker/requirements.txt`, para os dois
+ambientes não divergirem:
+
+| Biblioteca | Versão | Para quê | Grupo |
+| --- | --- | --- | --- |
+| `pyspark` | 4.0.1 | Spark | principal |
+| `delta-spark` | 4.0.0 | Delta Lake (MERGE, deletion vectors, time travel) | principal |
+| `pytest` | 8.4.2 | testes e prova de mutação | dev |
+| `jupyterlab` | 4.4.9 | notebooks | dev |
+| `pandas` + `pyarrow` | 2.3.3 / 21.0.0 | opcionais: `toPandas()` e exibição no notebook; o código da fatia 1 não usa | opcional |
+
+```bash
+uv add pyspark==4.0.1 delta-spark==4.0.0
+```
+
+```bash
+uv add --dev pytest==8.4.2 jupyterlab==4.4.9
+```
+
+```bash
+uv add pandas==2.3.3 pyarrow==21.0.0
+```
+
+**Fica de fora, de propósito:** `sqlalchemy` e o driver do MySQL. O
+`scripts/exportar_dw.py` roda com o Python do `webservices_flask` e usa a conexão
+de lá (`core.database`), para nenhuma senha nem driver de banco morar nesta
+pasta (constitution).
+
+**Spark direto no Windows:** o Java 21 da máquina serve ao Spark 4, mas gravar
+Delta em disco local no Windows costuma exigir `winutils.exe` + `HADOOP_HOME`.
+Por isso o job e os testes rodam no contêiner.
+
+**Uma lista só (T16):** o `docker/Dockerfile` instala direto pelo `uv.lock`
+(`uv sync --frozen` em `/opt/venv`, fora de `/work` para não colidir com o
+`.venv` do Windows no bind mount), e o antigo `docker/requirements.txt` foi
+removido, mantendo contêiner e ambiente local sempre nas mesmas versões.
 
 ## Testes
 

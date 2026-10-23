@@ -1,6 +1,0 @@
-pyspark==4.0.1
-delta-spark==4.0.0
-jupyterlab==4.4.9
-pytest==8.4.2
-pandas==2.3.3
-pyarrow==21.0.0

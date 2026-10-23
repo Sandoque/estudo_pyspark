@@ -2,6 +2,16 @@
 
 Cada checkpoint registra o que foi entregue, com números da execução real.
 
+## 23/10/2026 — decisão: projeto gerido pelo uv (T15 e T16 entregues)
+
+O dono iniciou o projeto com `uv init`. Documentado em `plan.md` ("Ambiente
+Python (uv)"): Python 3.12 (com `requires-python = ">=3.12,<3.13"`, pois `<3.13`
+sem limite inferior fazia o resolvedor universal do `uv` tentar resolver para
+Python `<3.9`), as dependências travadas em `uv.lock`, o que fica de fora
+(`sqlalchemy`/driver do MySQL, que são do `webservices_flask`) e o contêiner
+como ambiente de execução instalando via `uv sync --frozen` em `/opt/venv` (sem
+`docker/requirements.txt`).
+
 ## 23/10/2026 — fatia 1b entregue (MERGE com Deletion Vectors, mutação e amostra sintética)
 
 ### T12 — Comparativo de estratégias de MERGE na Silver (31.625 linhas, 8 arquivos Parquet)

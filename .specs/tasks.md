@@ -19,3 +19,8 @@ Estado: `[ ]` a fazer · `[x]` feito, com evidência.
 - [x] T12 MERGE sem reescrever o que não mudou: comparar (a) deletion vectors ligados, (b) filtrar antes só as linhas novas/alteradas por anti-join no `_hash_linha` -- `delta.enableDeletionVectors = true` zerou a reescrita sem mudança (version não avança, 0 arquivos) e em mudança pontual (1 alt / 1 ins / 1 del) gravou só 2 linhas (`numTargetRowsCopied = 0`) + 1 deletion vector em 2,43 s, contra 8 arquivos / 31.625 linhas do MERGE antigo e 1 arquivo / 3.953 linhas do pré-filtro sem DV (23/10)
 - [x] T13 Provar os testes por mutação (estragar a regra do documento, do fim8, da unicidade) e registrar quais pegaram — `scripts/testar_mutacoes.py`: 8/8 mutações mortas (23/10)
 - [x] T14 Amostra sintética com o mesmo formato (sem dado real) para rodar na Databricks Free Edition — `scripts/gerar_amostra_sintetica.py` + `seeds/amostra_sintetica/clientes_denver_sintetico.{csv,json}` (185 linhas: 180 válidas, 4 quarentena, 1 duplicata exata, 12/12 reconciliados em `tests/test_fim_a_fim_sintetico.py`) (23/10)
+
+## Ambiente uv (plan.md, "Ambiente Python (uv)")
+
+- [x] T15 Python 3.12 no projeto uv (`uv python pin 3.12`, `requires-python = ">=3.12,<3.13"`) e as dependências do plan com `uv add` (principal: pyspark, delta-spark; dev: pytest, jupyterlab; opcional: pandas, pyarrow) — evidência: `uv.lock` gerado e `uv run python -c "import pyspark, delta"` ok (23/10)
+- [x] T16 Dockerfile instalando pelo `uv.lock` (`uv sync --frozen`) no lugar de `docker/requirements.txt`, que sai — evidência: `docker compose build` + `pytest` (28 passed) + `scripts/testar_mutacoes.py` (8/8 mortas) verdes no contêiner novo (23/10)
