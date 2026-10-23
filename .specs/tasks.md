@@ -14,8 +14,8 @@ Estado: `[ ]` a fazer · `[x]` feito, com evidência.
 - [x] T10 (FR-09, FR-10) Tempos e relatório JSON — `reports/fatia1_*.json`
 - [x] T11 Checkpoint com o critério do teste de uso (spec §4) — ver checkpoints.md, 23/10
 
-## Próximas (fatia 1b, antes da fatia 2)
+## Fatia 1b (entregue em 23/10)
 
-- [ ] T12 MERGE sem reescrever o que não mudou: comparar (a) deletion vectors ligados, (b) filtrar antes só as linhas novas/alteradas por anti-join no `_hash_linha` -- medir arquivos e linhas reescritos
-- [ ] T13 Provar os testes por mutação (estragar a regra do documento, do fim8, da unicidade) e registrar quais pegaram
-- [ ] T14 Amostra sintética com o mesmo formato (sem dado real) para rodar na Databricks Free Edition
+- [x] T12 MERGE sem reescrever o que não mudou: comparar (a) deletion vectors ligados, (b) filtrar antes só as linhas novas/alteradas por anti-join no `_hash_linha` -- `delta.enableDeletionVectors = true` zerou a reescrita sem mudança (version não avança, 0 arquivos) e em mudança pontual (1 alt / 1 ins / 1 del) gravou só 2 linhas (`numTargetRowsCopied = 0`) + 1 deletion vector em 2,43 s, contra 8 arquivos / 31.625 linhas do MERGE antigo e 1 arquivo / 3.953 linhas do pré-filtro sem DV (23/10)
+- [x] T13 Provar os testes por mutação (estragar a regra do documento, do fim8, da unicidade) e registrar quais pegaram — `scripts/testar_mutacoes.py`: 8/8 mutações mortas (23/10)
+- [x] T14 Amostra sintética com o mesmo formato (sem dado real) para rodar na Databricks Free Edition — `scripts/gerar_amostra_sintetica.py` + `seeds/amostra_sintetica/clientes_denver_sintetico.{csv,json}` (185 linhas: 180 válidas, 4 quarentena, 1 duplicata exata, 12/12 reconciliados em `tests/test_fim_a_fim_sintetico.py`) (23/10)

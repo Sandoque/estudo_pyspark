@@ -100,13 +100,17 @@ def test_quarentena_com_motivo_e_a_conta_fecha(spark):
 
 
 def test_merge_e_idempotente_e_segue_o_retrato(spark, tmp_path):
+    from delta.tables import DeltaTable
+
     destino = str(tmp_path / "silver")
     v1 = s.transformar(_bronze(spark,
                                {"revenda": "Denver", "codigo_cliente": "1", "telefone": "82999990001"},
                                {"revenda": "Denver", "codigo_cliente": "2", "telefone": "82999990002"}))[0]
     s.gravar(spark, v1, destino)
-    s.gravar(spark, v1, destino)  # de novo: nada muda
+    s.gravar(spark, v1, destino)  # de novo: nada muda e não reescreve arquivos (T12)
     assert spark.read.format("delta").load(destino).count() == 2
+    hist_idemp = DeltaTable.forPath(spark, destino).history(1).first()
+    assert hist_idemp["version"] == 0  # Deletion Vectors: MERGE sem mudança vira no-op
 
     # Retrato seguinte: o 1 mudou de telefone, o 2 sumiu, o 3 chegou.
     v2 = s.transformar(_bronze(spark,
@@ -115,3 +119,5 @@ def test_merge_e_idempotente_e_segue_o_retrato(spark, tmp_path):
     s.gravar(spark, v2, destino)
     agora = {r["codigo_cliente"]: r["telefone_fim8"] for r in spark.read.format("delta").load(destino).collect()}
     assert agora == {"1": "88880001", "3": "99990003"}
+    metricas = DeltaTable.forPath(spark, destino).history(1).first()["operationMetrics"]
+    assert metricas["numTargetRowsCopied"] == "0"

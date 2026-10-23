@@ -180,13 +180,21 @@ def gravar(spark: SparkSession, silver: DataFrame, destino: str) -> None:
 
     Atualiza quem mudou (pelo hash da linha), insere quem chegou e apaga quem
     sumiu do cadastro -- a exportação é sempre o cadastro inteiro.
+
+    Com Deletion Vectors ligados (T12), repetir o mesmo retrato não reescreve
+    nenhum arquivo, e mudanças pontuais gravam só as linhas tocadas (`numTargetRowsCopied = 0`).
     """
 
     if not DeltaTable.isDeltaTable(spark, destino):
-        silver.write.format("delta").save(destino)
+        silver.write.format("delta").option("delta.enableDeletionVectors", "true").save(destino)
         return
+    tabela = DeltaTable.forPath(spark, destino)
+    props = tabela.detail().select("properties").first()["properties"] or {}
+    if props.get("delta.enableDeletionVectors") != "true":
+        spark.sql(f"ALTER TABLE delta.`{destino}` SET TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')")
+        tabela = DeltaTable.forPath(spark, destino)
     (
-        DeltaTable.forPath(spark, destino).alias("t")
+        tabela.alias("t")
         .merge(silver.alias("s"), "t.codigo_cliente = s.codigo_cliente")
         .whenMatchedUpdateAll(condition="t._hash_linha <> s._hash_linha")
         .whenNotMatchedInsertAll()
